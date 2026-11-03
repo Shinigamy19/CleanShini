@@ -39,6 +39,8 @@ enum Commands {
         min_size: Option<u64>,
         #[arg(long)]
         json: bool,
+        #[arg(long)]
+        preset: Option<String>,
     },
     Plan { #[arg(long)] json: bool },
     Clean {
@@ -49,7 +51,7 @@ enum Commands {
         #[arg(long)] dry_run: bool,
     },
     Rules { #[command(subcommand)] sub: RulesCmd },
-    Audit { #[arg(long, default_value = "20")] limit: usize, #[arg(long)] json: bool },
+    Audit { #[arg(long, default_value = "20")] limit: usize, #[arg(long)] json: bool, #[arg(long)] csv: bool },
     Config { #[command(subcommand)] sub: ConfigCmd },
     EmptyRecycleBin,
     SystemCleanup {
@@ -81,8 +83,16 @@ fn parse_cats(input: &[String]) -> Vec<Category> {
     input.iter().filter_map(|s| Category::from_str(s)).collect()
 }
 
-fn cmd_scan(categories: Vec<String>, min_age: Option<u32>, min_size: Option<u64>, json: bool) -> Result<()> {
+fn cmd_scan(categories: Vec<String>, min_age: Option<u32>, min_size: Option<u64>, json: bool, preset: Option<String>) -> Result<()> {
     let mut rules = load_rules();
+    if let Some(p) = &preset {
+        match p.as_str() {
+            "rapido" | "quick" => { rules.categories = vec![Category::Temp, Category::Cache, Category::Log]; rules.min_age_days = 0; rules.permanent_delete = false; }
+            "profundo" | "deep" => { rules.categories = Category::all(); rules.min_age_days = 0; rules.permanent_delete = false; rules.large_min_bytes = 500 * 1024 * 1024; }
+            "seguro" | "safe" => { rules.categories = vec![Category::Temp, Category::Cache, Category::Log]; rules.min_age_days = 7; rules.permanent_delete = false; }
+            _ => {}
+        }
+    }
     if !categories.is_empty() { rules.categories = parse_cats(&categories); }
     if let Some(a) = min_age { rules.min_age_days = a; }
     if let Some(s) = min_size { rules.min_size_bytes = s; }
@@ -202,8 +212,17 @@ fn cmd_rules(sub: RulesCmd) -> Result<()> {
     Ok(())
 }
 
-fn cmd_audit(limit: usize, json: bool) -> Result<()> {
+fn cmd_audit(limit: usize, json: bool, csv: bool) -> Result<()> {
     let reports = read_reports(limit)?;
+    if csv {
+        println!("timestamp,path,size,category,mode,success,error");
+        for r in &reports {
+            for rec in &r.records {
+                println!("{},{},{},{},{},{},{}", rec.timestamp, rec.path.display(), rec.size, rec.category.as_str(), rec.mode.as_str(), if rec.success {"true"} else {"false"}, rec.error.as_deref().unwrap_or(""));
+            }
+        }
+        return Ok(());
+    }
     if json { println!("{}", serde_json::to_string_pretty(&reports)?); return Ok(()); }
     if reports.is_empty() { println!("Sin historial de auditoría."); return Ok(()); }
     for r in &reports {
@@ -268,10 +287,12 @@ impl Default for AppState {
         let rules = load_rules();
         let plan = load_plan();
         let selected = plan.as_ref().map(|p| p.items.iter().map(|i| i.selected).collect()).unwrap_or_default();
+        let dark_mode = rules.ui_dark_mode;
+        let lang = if rules.ui_language == "en" { Lang::En } else { Lang::Es };
         Self {
             tab: Tab::Scan,
-            dark_mode: true,
-            lang: Lang::Es,
+            dark_mode,
+            lang,
             rules,
             plan,
             scan_msg: String::new(),
@@ -460,9 +481,15 @@ impl eframe::App for AppState {
                     if ui.selectable_label(sel, text).clicked() { self.tab = t; }
                 }
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    if ui.button(self.lang.code()).clicked() { self.lang = self.lang.next(); }
+                    if ui.button(self.lang.code()).clicked() {
+                        self.lang = self.lang.next();
+                        self.rules.ui_language = if self.lang == Lang::En { "en".into() } else { "es".into() };
+                        let _ = save_rules(&self.rules);
+                    }
                     if ui.button(if self.dark_mode { s.theme_light } else { s.theme_dark }).clicked() {
                         self.dark_mode = !self.dark_mode;
+                        self.rules.ui_dark_mode = self.dark_mode;
+                        let _ = save_rules(&self.rules);
                     }
                 });
 
@@ -545,6 +572,31 @@ impl AppState {
             draw_category_chart(ui, &p, false, self.lang);
         } else {
             ui.add_space(12.0);
+        ui.add_space(8.0);
+        ui.label("Presets:");
+        ui.horizontal_wrapped(|ui| {
+            if ui.button("Rapido (temp+cache+log)").clicked() {
+                self.rules.categories = vec![Category::Temp, Category::Cache, Category::Log];
+                self.rules.min_age_days = 0;
+                self.rules.permanent_delete = false;
+                let _ = save_rules(&self.rules);
+            }
+            if ui.button("Profundo (todo)").clicked() {
+                self.rules.categories = Category::all();
+                self.rules.min_age_days = 0;
+                self.rules.permanent_delete = false;
+                self.rules.large_min_bytes = 500 * 1024 * 1024;
+                let _ = save_rules(&self.rules);
+            }
+            if ui.button("Seguro (temp+cache, +7 dias)").clicked() {
+                self.rules.categories = vec![Category::Temp, Category::Cache, Category::Log];
+                self.rules.min_age_days = 7;
+                self.rules.permanent_delete = false;
+                let _ = save_rules(&self.rules);
+            }
+        });
+        ui.add_space(4.0);
+
             ui.label(s.no_plan);
         }
 
@@ -896,11 +948,11 @@ fn run_cli(cmd: Commands) -> Result<()> {
     ensure_dirs()?;
     tracing_subscriber::fmt().init();
     match cmd {
-        Commands::Scan { categories, min_age, min_size, json } => cmd_scan(categories, min_age, min_size, json),
+        Commands::Scan { categories, min_age, min_size, json, preset } => cmd_scan(categories, min_age, min_size, json, preset),
         Commands::Plan { json } => cmd_plan(json),
         Commands::Clean { plan, permanent, yes, categories, dry_run } => cmd_clean(plan, permanent, yes, categories, dry_run),
         Commands::Rules { sub } => cmd_rules(sub),
-        Commands::Audit { limit, json } => cmd_audit(limit, json),
+        Commands::Audit { limit, json, csv } => cmd_audit(limit, json, csv),
         Commands::Config { sub } => cmd_config(sub),
         Commands::EmptyRecycleBin => { cleanshini_core::empty_recycle_bin()?; println!("Papelera vaciada."); Ok(()) }
         Commands::SystemCleanup { dism, cleanmgr, hibernation, shadows, all } => {

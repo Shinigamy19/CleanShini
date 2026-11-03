@@ -78,6 +78,15 @@ pub enum DeleteMode {
     Permanent,
 }
 
+impl DeleteMode {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            DeleteMode::RecycleBin => "recyclebin",
+            DeleteMode::Permanent => "permanent",
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ScanItem {
     pub path: PathBuf,
@@ -142,6 +151,8 @@ pub struct RuleSet {
     pub large_min_bytes: u64,
     pub large_scan_paths: Vec<PathBuf>,
     pub selected_drives: Vec<String>,
+    pub ui_dark_mode: bool,
+    pub ui_language: String,
     pub categories: Vec<Category>,
     pub permanent_delete: bool,
 }
@@ -310,6 +321,8 @@ impl Default for RuleSet {
             large_min_bytes: 1024 * 1024 * 1024, // 1 GB
             large_scan_paths: default_large_scan_paths(),
             selected_drives: default_selected_drives(),
+            ui_dark_mode: true,
+            ui_language: "es".to_string(),
             categories: Category::all(),
             permanent_delete: false,
         }
