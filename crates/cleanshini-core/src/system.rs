@@ -1,5 +1,24 @@
 use crate::model::Result;
 
+/// Información de la papelera: (cantidad de items, tamaño en bytes).
+pub fn recycle_bin_info() -> (u64, u64) {
+    #[cfg(target_os = "windows")]
+    {
+        use windows::Win32::Foundation::HWND;
+        use windows::Win32::UI::Shell::{SHQUERYRBINFO, SHQueryRecycleBinW};
+        use windows::core::PCWSTR;
+        unsafe {
+            let mut info = SHQUERYRBINFO { cbSize: std::mem::size_of::<SHQUERYRBINFO>() as u32, i64Size: 0, i64NumItems: 0 };
+            let _ = SHQueryRecycleBinW(PCWSTR::null(), &mut info);
+            (info.i64NumItems as u64, info.i64Size as u64)
+        }
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        (0, 0)
+    }
+}
+
 /// Vacía la papelera de reciclaje / basura del sistema.
 pub fn empty_recycle_bin() -> Result<()> {
     #[cfg(target_os = "windows")]
@@ -94,6 +113,26 @@ pub fn list_drives() -> Vec<DriveInfo> {
         out.push(DriveInfo { root: "/".to_string(), label: "/".to_string() });
     }
     out
+}
+
+/// Envía una notificación del sistema (best-effort).
+pub fn notify(title: &str, body: &str) {
+    #[cfg(target_os = "windows")]
+    {
+        let _ = std::process::Command::new("powershell")
+            .args(["-Command", &format!("Add-Type -AssemblyName System.Windows.Forms; [System.Windows.Forms.MessageBox]::Show('{}','{}')", body, title)])
+            .status();
+    }
+    #[cfg(target_os = "linux")]
+    {
+        let _ = std::process::Command::new("notify-send").args([title, body]).status();
+    }
+    #[cfg(target_os = "macos")]
+    {
+        let _ = std::process::Command::new("osascript")
+            .args(["-e", &format!("display notification \"{}\" with title \"{}\"", body, title)])
+            .status();
+    }
 }
 
 #[derive(Debug, Clone)]

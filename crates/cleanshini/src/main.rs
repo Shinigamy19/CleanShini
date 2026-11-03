@@ -54,6 +54,17 @@ enum Commands {
     Audit { #[arg(long, default_value = "20")] limit: usize, #[arg(long)] json: bool, #[arg(long)] csv: bool },
     Config { #[command(subcommand)] sub: ConfigCmd },
     EmptyRecycleBin,
+    Schedule {
+        #[arg(long)] install: bool,
+        #[arg(long)] remove: bool,
+    },
+    Space {
+        #[arg(long, default_value = "20")] top: usize,
+        #[arg(long)] path: Option<String>,
+    },
+    Duplicates {
+        #[arg(long)] path: Option<String>,
+    },
     SystemCleanup {
         #[arg(long)] dism: bool,
         #[arg(long)] cleanmgr: bool,
@@ -277,6 +288,7 @@ struct AppState {
     permanent: bool,
     dry_run: bool,
     confirm_clean: bool,
+    perm_countdown: Option<std::time::Instant>,
     system_msg: String,
     system_running: bool,
     system_rx: Option<mpsc::Receiver<String>>,
@@ -311,6 +323,7 @@ impl Default for AppState {
             permanent: false,
             dry_run: false,
             confirm_clean: false,
+            perm_countdown: None,
             system_msg: String::new(),
             system_running: false,
             system_rx: None,
@@ -414,6 +427,17 @@ fn draw_category_chart(ui: &mut egui::Ui, plan: &Plan, selected_only: bool, lang
             egui::FontId::proportional(11.0), egui::Color32::WHITE);
     }
     ui.label(format!("Total: {}", cleanshini_core::scanner::format_size(total)));
+}
+
+fn dir_size(path: &std::path::Path) -> u64 {
+    if path.is_file() { return path.metadata().map(|m| m.len()).unwrap_or(0); }
+    let mut total = 0u64;
+    if let Ok(rd) = std::fs::read_dir(path) {
+        for e in rd.flatten() {
+            total += dir_size(&e.path());
+        }
+    }
+    total
 }
 
 fn load_plan() -> Option<Plan> {
@@ -651,6 +675,11 @@ impl AppState {
             ui.colored_label(egui::Color32::from_rgb(80, 200, 120), &self.system_msg);
         }
 
+        // Recycle bin info
+        let (rb_count, rb_size) = cleanshini_core::recycle_bin_info();
+        ui.add_space(4.0);
+        ui.label(format!("Papelera: {} items ({})", rb_count, cleanshini_core::scanner::format_size(rb_size)));
+
         ui.add_space(6.0);
         egui::CollapsingHeader::new("ℹ ¿Qué hace cada opción?").show(ui, |ui| {
             ui.label(" Vaciar papelera: elimina el contenido de la Papelera de reciclaje (recupera espacio).");
@@ -689,7 +718,14 @@ impl AppState {
                 for s in &mut self.selected { *s = false; }
                 for pi in &mut plan.items { pi.selected = false; }
             }
+            let perm_before = self.permanent;
             ui.checkbox(&mut self.permanent, s.permanent);
+            if self.permanent && !perm_before {
+                self.perm_countdown = Some(std::time::Instant::now());
+            }
+            if !self.permanent {
+                self.perm_countdown = None;
+            }
             ui.checkbox(&mut self.dry_run, s.dry_run);
         });
 
@@ -703,7 +739,14 @@ impl AppState {
             if self.cleaning {
                 ui.spinner(); ui.label("Limpiando...");
             } else {
-                if ui.add(egui::Button::new(egui::RichText::new(format!("\u{2715} {}", s.clean_selected)).color(egui::Color32::WHITE)).fill(egui::Color32::from_rgb(200, 60, 60))).clicked() {
+            let perm_ok = !self.permanent || self.perm_countdown.map(|t| t.elapsed().as_secs() >= 3).unwrap_or(false);
+            if !perm_ok {
+                if let Some(t) = self.perm_countdown {
+                    let rem = 3u64.saturating_sub(t.elapsed().as_secs());
+                    ui.label(format!("Espera {}s para confirmar borrado permanente...", rem));
+                }
+            }
+                if ui.add_enabled(perm_ok, egui::Button::new(egui::RichText::new(format!("\u{2715} {}", s.clean_selected)).color(egui::Color32::WHITE)).fill(egui::Color32::from_rgb(200, 60, 60))).clicked() {
                     if sel_count == 0 { self.clean_msg = s.no_selection.into(); }
                     else if !self.confirm_clean { self.clean_msg = s.confirm_needed.into(); }
                     else {
@@ -723,6 +766,7 @@ impl AppState {
                             match execute_plan(&p, permanent, |_i,_t,_path| {}) {
                                 Ok(rep) => {
                                     let _ = append_report(&rep);
+                                    cleanshini_core::notify("CleanShini", &format!("Borrados: {} | Liberados: {}", rep.succeeded, cleanshini_core::scanner::format_size(rep.total_freed)));
                                     // Remove successfully deleted items from the plan
                                     let succeeded_paths: std::collections::HashSet<_> = rep.records.iter().filter(|r| r.success).map(|r| r.path.clone()).collect();
                                     let mut new_plan = p.clone();
@@ -955,6 +999,73 @@ fn run_cli(cmd: Commands) -> Result<()> {
         Commands::Audit { limit, json, csv } => cmd_audit(limit, json, csv),
         Commands::Config { sub } => cmd_config(sub),
         Commands::EmptyRecycleBin => { cleanshini_core::empty_recycle_bin()?; println!("Papelera vaciada."); Ok(()) }
+        Commands::Schedule { install, remove } => {
+            if install {
+                #[cfg(target_os = "windows")]
+                {
+                    let exe = std::env::current_exe().unwrap_or_default();
+                    let status = std::process::Command::new("schtasks")
+                        .args(["/Create", "/TN", "CleanShini", "/TR", &format!("\"{}\" clean -y", exe.display()), "/SC", "DAILY", "/ST", "03:00", "/F"])
+                        .status();
+                    match status {
+                        Ok(s) if s.success() => println!("Tarea programada creada (diaria 03:00)."),
+                        _ => println!("No se pudo crear la tarea (ejecutá como admin)."),
+                    }
+                }
+                #[cfg(not(target_os = "windows"))]
+                {
+                    println!("En Linux/macOS, agregá a crontab: 0 3 * * * {} clean -y", std::env::current_exe().unwrap_or_default().display());
+                }
+            } else if remove {
+                #[cfg(target_os = "windows")]
+                {
+                    let status = std::process::Command::new("schtasks").args(["/Delete", "/TN", "CleanShini", "/F"]).status();
+                    match status {
+                        Ok(s) if s.success() => println!("Tarea eliminada."),
+                        _ => println!("No se pudo eliminar (o no existía)."),
+                    }
+                }
+                #[cfg(not(target_os = "windows"))]
+                {
+                    println!("Eliminá la línea de crontab manualmente.");
+                }
+            } else {
+                println!("Usá --install o --remove.");
+            }
+            Ok(())
+        }
+        Commands::Space { top, path } => {
+            let root = path.map(std::path::PathBuf::from).unwrap_or_else(|| std::env::current_dir().unwrap_or_default());
+            // Compute size per top-level entry
+            let mut entries: Vec<(std::path::PathBuf, u64)> = Vec::new();
+            if let Ok(rd) = std::fs::read_dir(&root) {
+                for e in rd.flatten() {
+                    let p = e.path();
+                    let size = dir_size(&p);
+                    entries.push((p, size));
+                }
+            }
+            entries.sort_by(|a, b| b.1.cmp(&a.1));
+            println!("Espacio por carpeta en {}:", root.display());
+            for (p, sz) in entries.iter().take(top) {
+                println!("  {}  {}", cleanshini_core::scanner::format_size(*sz), p.display());
+            }
+            Ok(())
+        }
+        Commands::Duplicates { path } => {
+            let roots = if let Some(p) = path { vec![std::path::PathBuf::from(p)] } else { vec![std::env::current_dir().unwrap_or_default()] };
+            let groups = cleanshini_core::find_duplicates(&roots)?;
+            if groups.is_empty() { println!("No se encontraron duplicados."); return Ok(()); }
+            for g in &groups {
+                println!("Hash {} ({} bytes, {} copias):", g.hash, g.size, g.paths.len());
+                for p in &g.paths { println!("  {}", p.display()); }
+                let wasted = g.size * (g.paths.len() as u64 - 1);
+                println!("  Espacio recuperable: {}", cleanshini_core::scanner::format_size(wasted));
+            }
+            let total: u64 = groups.iter().map(|g| g.size * (g.paths.len() as u64 - 1)).sum();
+            println!("\nTotal recuperable: {}", cleanshini_core::scanner::format_size(total));
+            Ok(())
+        }
         Commands::SystemCleanup { dism, cleanmgr, hibernation, shadows, all } => {
             let (d, c, h, s) = if all { (true, true, true, true) } else { (dism, cleanmgr, hibernation, shadows) };
             let res = cleanshini_core::run_system_cleanup(d, c, h, s);
