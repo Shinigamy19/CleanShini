@@ -1,5 +1,7 @@
 use crate::model::Result;
 use std::collections::HashMap;
+use std::fs::File;
+use std::io::Read;
 use std::path::PathBuf;
 
 #[derive(Debug, Clone)]
@@ -10,10 +12,8 @@ pub struct DuplicateGroup {
 }
 
 /// Encuentra archivos duplicados por hash en las rutas dadas.
-/// Primero agrupa por tamaño, luego hashea solo los candidatos.
+/// Primero agrupa por tamaño, luego hashea solo los candidatos (por chunks).
 pub fn find_duplicates(roots: &[PathBuf]) -> Result<Vec<DuplicateGroup>> {
-    use std::fs::File;
-    use std::io::Read;
     // Group files by size
     let mut by_size: HashMap<u64, Vec<PathBuf>> = HashMap::new();
     for root in roots {
@@ -30,14 +30,23 @@ pub fn find_duplicates(roots: &[PathBuf]) -> Result<Vec<DuplicateGroup>> {
     let mut groups = Vec::new();
     for (size, paths) in by_size {
         if paths.len() < 2 { continue; }
-        // Hash each file
+        // Hash each file (chunked)
         let mut by_hash: HashMap<String, Vec<PathBuf>> = HashMap::new();
         for path in paths {
             if let Ok(mut f) = File::open(&path) {
-                let mut buf = Vec::new();
-                if f.read_to_end(&mut buf).is_ok() {
-                    use sha2::{Sha256, Digest};
-                    let hash = format!("{:x}", Sha256::digest(&buf));
+                use sha2::{Sha256, Digest};
+                let mut hasher = Sha256::new();
+                let mut buf = vec![0u8; 64 * 1024];
+                let mut ok = true;
+                loop {
+                    match f.read(&mut buf) {
+                        Ok(0) => break,
+                        Ok(n) => hasher.update(&buf[..n]),
+                        Err(_) => { ok = false; break; }
+                    }
+                }
+                if ok {
+                    let hash = format!("{:x}", hasher.finalize());
                     by_hash.entry(hash).or_default().push(path);
                 }
             }

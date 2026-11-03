@@ -524,7 +524,7 @@ impl eframe::App for AppState {
                 if let Some(plan) = &self.plan {
                     ui.label(egui::RichText::new(format!("Plan: {} items  |  {}  |  Sel: {}", plan.items.len(), cleanshini_core::scanner::format_size(plan.total_size()), plan.items.iter().filter(|i| i.selected).count())).color(egui::Color32::from_rgb(180, 190, 210)).size(11.0));
                 } else {
-                    ui.label(egui::RichText::new("Sin plan. Escaneá para empezar.").color(egui::Color32::from_rgb(180, 190, 210)).size(11.0));
+                    ui.label(egui::RichText::new(s.no_plan_yet).color(egui::Color32::from_rgb(180, 190, 210)).size(11.0));
                 }
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     if self.scanning { ui.spinner(); }
@@ -597,22 +597,22 @@ impl AppState {
         } else {
             ui.add_space(12.0);
         ui.add_space(8.0);
-        ui.label("Presets:");
+        ui.label(s.presets);
         ui.horizontal_wrapped(|ui| {
-            if ui.button("Rapido (temp+cache+log)").clicked() {
+            if ui.button(s.preset_quick).clicked() {
                 self.rules.categories = vec![Category::Temp, Category::Cache, Category::Log];
                 self.rules.min_age_days = 0;
                 self.rules.permanent_delete = false;
                 let _ = save_rules(&self.rules);
             }
-            if ui.button("Profundo (todo)").clicked() {
+            if ui.button(s.preset_deep).clicked() {
                 self.rules.categories = Category::all();
                 self.rules.min_age_days = 0;
                 self.rules.permanent_delete = false;
                 self.rules.large_min_bytes = 500 * 1024 * 1024;
                 let _ = save_rules(&self.rules);
             }
-            if ui.button("Seguro (temp+cache, +7 dias)").clicked() {
+            if ui.button(s.preset_safe).clicked() {
                 self.rules.categories = vec![Category::Temp, Category::Cache, Category::Log];
                 self.rules.min_age_days = 7;
                 self.rules.permanent_delete = false;
@@ -678,15 +678,15 @@ impl AppState {
         // Recycle bin info
         let (rb_count, rb_size) = cleanshini_core::recycle_bin_info();
         ui.add_space(4.0);
-        ui.label(format!("Papelera: {} items ({})", rb_count, cleanshini_core::scanner::format_size(rb_size)));
+        ui.label(format!("{}: {} items ({})", s.recycle_bin_status, rb_count, cleanshini_core::scanner::format_size(rb_size)));
 
         ui.add_space(6.0);
-        egui::CollapsingHeader::new("ℹ ¿Qué hace cada opción?").show(ui, |ui| {
-            ui.label(" Vaciar papelera: elimina el contenido de la Papelera de reciclaje (recupera espacio).");
-            ui.label(" DISM (lento): limpia el almacén de componentes de Windows (WinSxS). Puede liberar varios GB. Requiere administrador y tarda minutos.");
-            ui.label("Desactivar hibernacion: elimina hiberfil.sys (su tamanio = tu RAM) y desactiva la hibernacion.");
-            ui.label(" Eliminar shadow copies: borra puntos de restauración del sistema, liberando espacio en disco.");
-            ui.label(" Ejecutá como administrador para que DISM y shadow copies funcionen.");
+        egui::CollapsingHeader::new(s.help_header).show(ui, |ui| {
+            ui.label(s.help_recycle);
+            ui.label(s.help_dism);
+            ui.label(s.help_hiber);
+            ui.label(s.help_shadows);
+            ui.label(s.help_admin);
         });
     }
 
@@ -766,7 +766,7 @@ impl AppState {
                             match execute_plan(&p, permanent, |_i,_t,_path| {}) {
                                 Ok(rep) => {
                                     let _ = append_report(&rep);
-                                    cleanshini_core::notify("CleanShini", &format!("Borrados: {} | Liberados: {}", rep.succeeded, cleanshini_core::scanner::format_size(rep.total_freed)));
+                                    let _ = notify_rust::Notification::new().summary("CleanShini").body(&format!("Borrados: {} | Liberados: {}", rep.succeeded, cleanshini_core::scanner::format_size(rep.total_freed))).show();
                                     // Remove successfully deleted items from the plan
                                     let succeeded_paths: std::collections::HashSet<_> = rep.records.iter().filter(|r| r.success).map(|r| r.path.clone()).collect();
                                     let mut new_plan = p.clone();
@@ -895,7 +895,7 @@ impl AppState {
                 else { self.rules.categories.retain(|c| *c != cat); }
             }
         }
-        ui.label("Discos a escanear:");
+        ui.label(s.disks_to_scan);
         let drives = cleanshini_core::list_drives();
         for d in &drives {
             let mut checked = self.rules.selected_drives.contains(&d.root);
