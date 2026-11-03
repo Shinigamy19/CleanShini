@@ -269,7 +269,10 @@ impl Default for RuleSet {
                 ".nuget/packages",
                 ".yarn/cache",
                 ".pnpm-store",
+                ".ollama",
                 ".ollama/models",
+                ".lmstudio",
+                ".lmstudio/models",
                 ".cache/huggingface/hub",
                 ".cache/lm-studio/models",
                 ".cache/torch",
@@ -277,6 +280,8 @@ impl Default for RuleSet {
                 ".jan/models",
                 ".cache/llama.cpp",
                 ".llama",
+                ".llama-models",
+                ".llamacpp",
             ] {
                 let q = h.join(sub);
                 if q.exists() { roots.push(q); }
@@ -288,7 +293,8 @@ impl Default for RuleSet {
                     if name.contains("comfyui") || name.contains("stable-diffusion") || name.contains("sd-webui")
                         || name.contains("text-generation-webui") || name.contains("kobold") || name.contains("oobabooga")
                         || name.contains("invokeai") || name.contains("automatic1111") || name.contains("llama")
-                        || name.contains("llamacpp") || name.contains("llama.cpp") {
+                        || name.contains("llamacpp") || name.contains("llama.cpp") || name.contains("lmstudio")
+                        || name.contains("lm-studio") {
                         if e.path().is_dir() { roots.push(e.path()); }
                     }
                 }

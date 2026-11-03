@@ -188,7 +188,7 @@ fn classify(path: &PathBuf, _root: &PathBuf, modified: SystemTime, now: SystemTi
         return Some((Category::DevCache, "caché de desarrollo".into()));
     }
     // AI model caches / files
-    if path_str.contains(".ollama") || path_str.contains("huggingface") || path_str.contains("lm-studio") || path_str.contains("gpt4all") || path_str.contains("\\.jan\\") {
+    if path_str.contains(".ollama") || path_str.contains(".lmstudio") || path_str.contains(".llamacpp") || path_str.contains(".llama-models") || path_str.contains(".llama") || path_str.contains("huggingface") || path_str.contains("lm-studio") || path_str.contains("gpt4all") || path_str.contains("\\.jan\\") {
         return Some((Category::AIModel, "modelo de IA local".into()));
     }
     // AI framework install dirs

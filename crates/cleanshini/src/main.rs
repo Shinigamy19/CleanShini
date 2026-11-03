@@ -1,3 +1,5 @@
+#![cfg_attr(target_os = "windows", windows_subsystem = "windows")]
+
 mod i18n;
 use anyhow::Result;
 use clap::{Parser, Subcommand};
@@ -87,7 +89,7 @@ fn cmd_scan(categories: Vec<String>, min_age: Option<u32>, min_size: Option<u64>
     println!("Escaneando...");
     let items = scan(&rules)?;
     let plan_items: Vec<PlanItem> = items.into_iter().map(|it| PlanItem {
-        selected: true,
+        selected: false,
         action: if rules.permanent_delete { DeleteMode::Permanent } else { DeleteMode::RecycleBin },
         item: it,
     }).collect();
@@ -246,6 +248,7 @@ struct AppState {
     selected: Vec<bool>,
     filter_cat: String,
     search: String,
+    ext_filter: String,
     sort_col: String,
     sort_asc: bool,
     reports: Vec<ExecutionReport>,
@@ -277,6 +280,7 @@ impl Default for AppState {
             selected,
             filter_cat: "all".into(),
             search: String::new(),
+            ext_filter: String::new(),
             sort_col: "size".into(),
             sort_asc: false,
             reports: read_reports(20).unwrap_or_default(),
@@ -290,6 +294,29 @@ impl Default for AppState {
             system_running: false,
             system_rx: None,
         }
+    }
+}
+
+fn cat_display(lang: i18n::Lang, key: &str) -> &'static str {
+    let s = strings(lang);
+    match key {
+        "temp" => s.temp,
+        "cache" => s.cache,
+        "residue" => s.residue,
+        "log" => s.log,
+        "oldfile" => s.oldfile,
+        "large" => s.large,
+        "recyclebin" => s.recyclebin,
+        "winupdate" => s.winupdate,
+        "windowsold" => s.windowsold,
+        "crashdump" => s.crashdump,
+        "appcache" => s.appcache,
+        "devcache" => s.devcache,
+        "aimodel" => s.aimodel,
+        "virtualdisk" => s.virtualdisk,
+        "custom" => s.custom,
+        "all" => s.all,
+        _ => s.custom,
     }
 }
 
@@ -313,7 +340,7 @@ fn category_color(cat: &str) -> egui::Color32 {
     }
 }
 
-fn draw_category_chart(ui: &mut egui::Ui, plan: &Plan, selected_only: bool) {
+fn draw_category_chart(ui: &mut egui::Ui, plan: &Plan, selected_only: bool, lang: i18n::Lang) {
     use std::collections::BTreeMap;
     let mut by_cat: BTreeMap<String, u64> = BTreeMap::new();
     for pi in &plan.items {
@@ -362,7 +389,7 @@ fn draw_category_chart(ui: &mut egui::Ui, plan: &Plan, selected_only: bool) {
         let bar_rect = egui::Rect::from_min_size(r.min, egui::vec2(bar_w, r.height()));
         ui.painter().rect_filled(bar_rect, 2.0, category_color(cat));
         ui.painter().text(r.min + egui::vec2(4.0, 1.0), egui::Align2::LEFT_TOP,
-            format!("{}  {}  ({:.1}%)", cat, cleanshini_core::scanner::format_size(*sz), *sz as f64 / total as f64 * 100.0),
+            format!("{}  {}  ({:.1}%)", cat_display(lang, cat), cleanshini_core::scanner::format_size(*sz), *sz as f64 / total as f64 * 100.0),
             egui::FontId::proportional(11.0), egui::Color32::WHITE);
     }
     ui.label(format!("Total: {}", cleanshini_core::scanner::format_size(total)));
@@ -399,7 +426,13 @@ impl eframe::App for AppState {
         if let Some(rx) = &self.clean_rx {
             if let Ok(res) = rx.try_recv() {
                 match res {
-                    Ok(m) => { self.clean_msg = m; self.reports = read_reports(20).unwrap_or_default(); }
+                    Ok(m) => {
+                        self.clean_msg = m;
+                        self.reports = read_reports(20).unwrap_or_default();
+                        // Reload plan (deleted items removed)
+                        self.plan = load_plan();
+                        self.selected = self.plan.as_ref().map(|p| p.items.iter().map(|i| i.selected).collect()).unwrap_or_default();
+                    }
                     Err(e) => { self.clean_msg = format!("Error: {}", e); }
                 }
                 self.cleaning = false;
@@ -480,7 +513,7 @@ impl AppState {
                     match scan(&rules) {
                         Ok(items) => {
                             let plan_items: Vec<PlanItem> = items.into_iter().map(|it| PlanItem {
-                                selected: true,
+                                selected: false,
                                 action: if rules.permanent_delete { DeleteMode::Permanent } else { DeleteMode::RecycleBin },
                                 item: it,
                             }).collect();
@@ -509,7 +542,7 @@ impl AppState {
             });
             ui.add_space(8.0);
             let p = plan.clone();
-            draw_category_chart(ui, &p, false);
+            draw_category_chart(ui, &p, false, self.lang);
         } else {
             ui.add_space(12.0);
             ui.label(s.no_plan);
@@ -587,11 +620,13 @@ impl AppState {
             egui::ComboBox::from_label("").selected_text(&self.filter_cat)
                 .show_ui(ui, |ui| {
                     for c in ["all","temp","cache","residue","log","oldfile","large","recyclebin","winupdate","windowsold","crashdump","appcache","devcache","aimodel","virtualdisk","custom"] {
-                        ui.selectable_value(&mut self.filter_cat, c.to_string(), c);
+                        ui.selectable_value(&mut self.filter_cat, c.to_string(), cat_display(self.lang, c));
                     }
                 });
-            ui.label("Buscar:");
+            ui.label(s.search);
             ui.text_edit_singleline(&mut self.search);
+            ui.label("Ext:");
+            ui.text_edit_singleline(&mut self.ext_filter);
         });
         ui.horizontal(|ui| {
             if ui.button(s.select_all).clicked() {
@@ -636,6 +671,13 @@ impl AppState {
                             match execute_plan(&p, permanent, |_i,_t,_path| {}) {
                                 Ok(rep) => {
                                     let _ = append_report(&rep);
+                                    // Remove successfully deleted items from the plan
+                                    let succeeded_paths: std::collections::HashSet<_> = rep.records.iter().filter(|r| r.success).map(|r| r.path.clone()).collect();
+                                    let mut new_plan = p.clone();
+                                    new_plan.items.retain(|pi| !succeeded_paths.contains(&pi.item.path));
+                                    let plan_path = cleanshini_core::last_plan_path();
+                                    if let Some(parent) = plan_path.parent() { let _ = std::fs::create_dir_all(parent); }
+                                    let _ = std::fs::write(&plan_path, serde_json::to_string_pretty(&new_plan).unwrap_or_default());
                                     let _ = tx.send(Ok(format!("Borrados: {}  Fallidos: {}  Liberados: {}", rep.succeeded, rep.failed, cleanshini_core::scanner::format_size(rep.total_freed))));
                                 }
                                 Err(e) => { let _ = tx.send(Err(e.to_string())); }
@@ -656,6 +698,10 @@ impl AppState {
                 let pi = &plan.items[idx];
                 if self.filter_cat != "all" && pi.item.category.as_str() != self.filter_cat { return false; }
                 if !self.search.is_empty() && !pi.item.path.to_string_lossy().to_lowercase().contains(&self.search.to_lowercase()) { return false; }
+                if !self.ext_filter.is_empty() {
+                    let ext = pi.item.path.extension().and_then(|e| e.to_str()).unwrap_or("").to_lowercase();
+                    if !ext.contains(&self.ext_filter.to_lowercase()) { return false; }
+                }
                 true
             })
             .collect();
@@ -700,15 +746,25 @@ impl AppState {
                 for &idx in &indices {
                     if shown >= cap { break; }
                     let pi = &plan.items[idx];
+                    let row_top = ui.cursor().min.y;
+                    let row_left = ui.cursor().min.x;
                     ui.checkbox(&mut self.selected[idx], "");
                     let (rect, _) = ui.allocate_exact_size(egui::vec2(90.0, 16.0), egui::Sense::hover());
                     let color = category_color(pi.item.category.as_str());
                     ui.painter().rect_filled(rect, 4.0, color.gamma_multiply(0.35));
-                    ui.painter().text(rect.center(), egui::Align2::CENTER_CENTER, pi.item.category.as_str(), egui::FontId::proportional(11.0), color);
+                    ui.painter().text(rect.center(), egui::Align2::CENTER_CENTER, cat_display(self.lang, pi.item.category.as_str()), egui::FontId::proportional(11.0), color);
                     ui.label(egui::RichText::new(cleanshini_core::scanner::format_size(pi.item.size)).color(egui::Color32::from_rgb(120, 200, 255)));
                     ui.label(pi.item.path.display().to_string());
                     ui.label(egui::RichText::new(format!("{}", pi.item.modified.elapsed().map(|d| format!("hace {} d", d.as_secs()/86400)).unwrap_or_else(|_| "?".into()))).color(egui::Color32::GRAY).size(10.0));
                     ui.end_row();
+                    let row_bottom = ui.cursor().min.y;
+                    let row_rect = egui::Rect::from_min_max(
+                        egui::pos2(row_left, row_top),
+                        egui::pos2(ui.max_rect().max.x, row_bottom),
+                    );
+                    if ui.rect_contains_pointer(row_rect) {
+                        ui.painter().rect_filled(row_rect, 0.0, egui::Color32::from_rgba_unmultiplied(100, 160, 255, 35));
+                    }
                     shown += 1;
                 }
             });
@@ -725,7 +781,7 @@ impl AppState {
         ui.label(egui::RichText::new(format!("{}: {} {}", s.sorted_by, self.sort_col, if self.sort_asc { "\u{25B2}" } else { "\u{25BC}" })).color(egui::Color32::GRAY).size(11.0));
         ui.separator();
         let p = plan.clone();
-        draw_category_chart(ui, &p, true);
+        draw_category_chart(ui, &p, true, self.lang);
         if !self.clean_msg.is_empty() { ui.label(&self.clean_msg); }
     }
 
@@ -824,7 +880,12 @@ fn main() {
         if let Err(e) = run_gui() { eprintln!("GUI error: {}", e); }
         return;
     }
-    // CLI mode
+    // CLI mode: attach a console on Windows (GUI subsystem has none)
+    #[cfg(target_os = "windows")]
+    {
+        use windows::Win32::System::Console::AllocConsole;
+        unsafe { let _ = AllocConsole(); }
+    }
     if let Err(e) = run_cli(cli.command.unwrap()) {
         eprintln!("Error: {}", e);
         std::process::exit(1);
