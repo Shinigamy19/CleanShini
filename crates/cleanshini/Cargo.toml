@@ -1,0 +1,25 @@
+[package]
+name = "cleanshini"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "cleanshini"
+path = "src/main.rs"
+
+[dependencies]
+cleanshini-core = { path = "../cleanshini-core" }
+eframe = "0.33"
+egui = "0.33"
+clap = { version = "4", features = ["derive", "color"] }
+serde = { workspace = true }
+serde_json = { workspace = true }
+chrono = { workspace = true }
+anyhow = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+
+[build-dependencies]
+winres = "0.1"

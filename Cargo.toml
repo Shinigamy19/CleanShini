@@ -1,0 +1,26 @@
+[workspace]
+resolver = "2"
+members = ["crates/cleanshini-core", "crates/cleanshini"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+authors = ["CleanShini"]
+license = "MIT"
+
+[workspace.dependencies]
+cleanshini-core = { path = "crates/cleanshini-core" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+chrono = { version = "0.4", features = ["serde"] }
+thiserror = "2"
+anyhow = "1"
+tracing = "0.1"
+tracing-subscriber = "0.3"
+walkdir = "2"
+trash = "5"
+clap = { version = "4", features = ["derive", "color"] }
+directories = "5"
+tokio = { version = "1", features = ["full"] }
+eframe = "0.33"
+egui = "0.33"

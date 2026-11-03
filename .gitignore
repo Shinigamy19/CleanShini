@@ -1,0 +1,5 @@
+/target
+*.pdb
+.cleanshini/
+.DS_Store
+Thumbs.db
