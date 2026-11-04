@@ -630,7 +630,7 @@ impl AppState {
             ui.horizontal(|ui| { ui.spinner(); ui.label(s.running); });
         } else {
             ui.horizontal_wrapped(|ui| {
-                if ui.button("\u{2715} Vaciar papelera").clicked() {
+                if ui.button(format!("\u{2715} {}", s.empty_recycle)).clicked() {
                     self.system_running = true; self.system_msg.clear();
                     let (tx, rx) = mpsc::channel();
                     self.system_rx = Some(rx);
@@ -638,7 +638,7 @@ impl AppState {
                         match cleanshini_core::empty_recycle_bin() { Ok(_) => { let _ = tx.send(s.recycle_emptied.into()); } Err(e) => { let _ = tx.send(format!("Error: {}", e)); } }
                     });
                 }
-                if ui.button("\u{2699} DISM (lento)").clicked() {
+                if ui.button(format!("\u{1F6E0} {}", s.dism)).clicked() {
                     self.system_running = true; self.system_msg.clear();
                     let (tx, rx) = mpsc::channel();
                     self.system_rx = Some(rx);
@@ -648,7 +648,7 @@ impl AppState {
                         let _ = tx.send(msg);
                     });
                 }
-                if ui.button("\u{23FB} Desactivar hibernacion").clicked() {
+                if ui.button(format!("\u{23FB} {}", s.hibernation)).clicked() {
                     self.system_running = true; self.system_msg.clear();
                     let (tx, rx) = mpsc::channel();
                     self.system_rx = Some(rx);
@@ -658,7 +658,7 @@ impl AppState {
                         let _ = tx.send(msg);
                     });
                 }
-                if ui.button("\u{21BA} Eliminar shadow copies").clicked() {
+                if ui.button(format!("\u{1F503} {}", s.shadows)).clicked() {
                     self.system_running = true; self.system_msg.clear();
                     let (tx, rx) = mpsc::channel();
                     self.system_rx = Some(rx);
@@ -953,15 +953,57 @@ impl AppState {
 
 fn run_gui() -> eframe::Result<()> {
     ensure_dirs().ok();
-    let options = eframe::NativeOptions::default();
+    // Window icon from embedded asset (cross-platform)
+    let window_icon = (|| {
+        let ico = include_bytes!("../../../assets/icon.ico");
+        if ico.len() < 6 { return None; }
+        let count = u16::from_le_bytes([ico[4], ico[5]]) as usize;
+        if count == 0 { return None; }
+        let entry = &ico[6..6 + 16];
+        if entry.len() < 16 { return None; }
+        let size = u32::from_le_bytes([entry[8], entry[9], entry[10], entry[11]]) as usize;
+        let offset = u32::from_le_bytes([entry[12], entry[13], entry[14], entry[15]]) as usize;
+        if offset + size > ico.len() { return None; }
+        eframe::icon_data::from_png_bytes(&ico[offset..offset + size]).ok()
+    })();
+    let mut options = eframe::NativeOptions::default();
+    if let Some(ic) = window_icon {
+        options.viewport = options.viewport.with_icon(ic);
+    }
     eframe::run_native("CleanShini", options, Box::new(|cc| {
-        // Load Segoe UI Symbol font for icons/symbols
+        // Load icon/symbol fonts (embedded + system fallbacks) so icons render on every OS
         let mut fonts = egui::FontDefinitions::default();
+        // Embedded cross-platform symbol font (guaranteed available)
+        fonts.font_data.insert(
+            "noto_symbols".to_owned(),
+            egui::FontData::from_static(include_bytes!("../../../assets/NotoSansSymbols2-Regular.ttf")).into(),
+        );
+        for family in [egui::FontFamily::Proportional, egui::FontFamily::Monospace] {
+            if let Some(list) = fonts.families.get_mut(&family) {
+                list.insert(0, "noto_symbols".to_owned());
+            }
+        }
+        // Optional system symbol font for extra glyphs (Windows)
         if let Ok(data) = std::fs::read("C:/Windows/Fonts/seguisym.ttf") {
             fonts.font_data.insert("seguisym".to_owned(), egui::FontData::from_owned(data).into());
             for family in [egui::FontFamily::Proportional, egui::FontFamily::Monospace] {
                 if let Some(list) = fonts.families.get_mut(&family) {
                     list.insert(0, "seguisym".to_owned());
+                }
+            }
+        }
+        // Optional system symbol fonts (Linux / macOS)
+        for (name, path) in [
+            ("dejavu", "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"),
+            ("noto_system", "/usr/share/fonts/truetype/noto/NotoSansSymbols2-Regular.ttf"),
+            ("apple_symbols", "/System/Library/Fonts/Apple Symbols.ttf"),
+        ] {
+            if let Ok(data) = std::fs::read(path) {
+                fonts.font_data.insert(name.to_owned(), egui::FontData::from_owned(data).into());
+                for family in [egui::FontFamily::Proportional, egui::FontFamily::Monospace] {
+                    if let Some(list) = fonts.families.get_mut(&family) {
+                        list.insert(0, name.to_owned());
+                    }
                 }
             }
         }
