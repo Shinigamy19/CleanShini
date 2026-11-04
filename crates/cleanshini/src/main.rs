@@ -70,6 +70,9 @@ enum Commands {
         #[arg(long)] cleanmgr: bool,
         #[arg(long)] hibernation: bool,
         #[arg(long)] shadows: bool,
+        #[arg(long)] docker: bool,
+        #[arg(long)] wsl: bool,
+        #[arg(long)] containers: bool,
         #[arg(long)] all: bool,
     },
 }
@@ -668,6 +671,16 @@ impl AppState {
                         let _ = tx.send(msg);
                     });
                 }
+                if ui.button(format!("\u{1F4E6} {}", s.containers_cleanup)).clicked() {
+                    self.system_running = true; self.system_msg.clear();
+                    let (tx, rx) = mpsc::channel();
+                    self.system_rx = Some(rx);
+                    std::thread::spawn(move || {
+                        let res = cleanshini_core::run_container_cleanup(true, true);
+                        let msg = res.iter().map(|r| format!("{}: {}", r.name, if r.success {"OK"} else {"FAIL"})).collect::<Vec<_>>().join(" | ");
+                        let _ = tx.send(msg);
+                    });
+                }
             });
         }
         if !self.system_msg.is_empty() {
@@ -1108,10 +1121,15 @@ fn run_cli(cmd: Commands) -> Result<()> {
             println!("\nTotal recuperable: {}", cleanshini_core::scanner::format_size(total));
             Ok(())
         }
-        Commands::SystemCleanup { dism, cleanmgr, hibernation, shadows, all } => {
+        Commands::SystemCleanup { dism, cleanmgr, hibernation, shadows, docker, wsl, containers, all } => {
             let (d, c, h, s) = if all { (true, true, true, true) } else { (dism, cleanmgr, hibernation, shadows) };
             let res = cleanshini_core::run_system_cleanup(d, c, h, s);
             for r in res { println!("{}: {} - {}", r.name, if r.success {"OK"} else {"FAIL"}, r.output.trim()); }
+            let (dk, ws) = if all || containers { (true, true) } else { (docker, wsl) };
+            if dk || ws {
+                let res2 = cleanshini_core::run_container_cleanup(dk, ws);
+                for r in res2 { println!("{}: {} - {}", r.name, if r.success {"OK"} else {"FAIL"}, r.output.trim()); }
+            }
             Ok(())
         }
     }

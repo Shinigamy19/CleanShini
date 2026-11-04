@@ -198,6 +198,28 @@ pub fn run_system_cleanup(dism: bool, cleanmgr: bool, hibernation_off: bool, sha
     results
 }
 
+/// Limpia contenedores/cachés de Docker y WSL.
+pub fn run_container_cleanup(docker: bool, wsl: bool) -> Vec<SystemCmdResult> {
+    let mut results = Vec::new();
+    if docker {
+        results.push(run_cmd("Docker system prune", "docker", &["system", "prune", "-af", "--volumes"]));
+    }
+    if wsl {
+        #[cfg(target_os = "windows")]
+        {
+            results.push(run_cmd("WSL shutdown", "wsl", &["--shutdown"]));
+            let ps = "Get-ChildItem -Path $env:LOCALAPPDATA\\Packages -Recurse -Filter *.vhdx -ErrorAction SilentlyContinue | ForEach-Object { try { Optimize-VHD -Path $_.FullName -Mode Full; Write-Output (\"OK \" + $_.FullName) } catch { Write-Output (\"FAIL \" + $_.FullName + \": \" + $_.Exception.Message) } }";
+            results.push(run_cmd("WSL compact VHDX", "powershell", &["-NoProfile", "-Command", ps]));
+        }
+        #[cfg(not(target_os = "windows"))]
+        {
+            results.push(SystemCmdResult { name: "WSL".to_string(), success: false, output: "WSL solo disponible en Windows".to_string() });
+        }
+    }
+    let _ = (docker, wsl);
+    results
+}
+
 #[cfg(any(target_os = "windows", target_os = "linux", target_os = "macos"))]
 fn run_cmd(name: &str, prog: &str, args: &[&str]) -> SystemCmdResult {
     use std::process::Command;
